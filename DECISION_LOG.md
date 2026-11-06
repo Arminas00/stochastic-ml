@@ -81,3 +81,26 @@ Formato: **D-numero — titolo** · data · *Scelta* / *Perché* / *Alternative 
 ### D-19 — Attenzione alla normalizzazione per serie · 2026-11-06 · notebook 01
 - **Osservazione:** la varianza campionaria di una serie di fGn vale in media 1 − N^(2H−2) (verificato): per H = 0.9 e N = 512 è ~0.69. Dividere ogni serie per la propria deviazione standard quindi non è neutro rispetto ad H.
 - **Da decidere nel notebook 03:** normalizzazione per serie (rimuove l'ampiezza, che per il fBm non è informativa) contro normalizzazione globale con statistiche del train.
+
+### D-20 — Scale di DFA e R/S: 12 scale log-equispaziate tra 8 e N/4 · 2026-11-06 · notebook 02
+- **Scelta:** stesse scale per DFA-1 e R/S; finestre non sovrapposte, prese da sinistra e da destra (DFA).
+- **Perché:** sotto ~8 punti la regressione locale e la deviazione standard per finestra sono troppo rumorose; sopra N/4 ci sono meno di 4 finestre per scala. Le stesse scale per i due metodi rendono il confronto pulito.
+- **Scartate:** scale fino a N/2 (troppo poche finestre); DFA di ordine 2 (inutile per fBm senza trend, più varianza).
+
+### D-21 — Esponente della NVG con lo stimatore di Clauset–Shalizi–Newman · 2026-11-06 · notebook 02
+- **Scelta:** massima verosimiglianza per una coda a legge di potenza, k_min scelto minimizzando la distanza di Kolmogorov–Smirnov, coda di almeno 50 punti. Per l'HVG, massima verosimiglianza della coda esponenziale (geometrica) per k ≥ 4. Se l'esponente non è stimabile, la previsione analitica usa la media del train (conteggio riportato).
+- **Perché:** è lo stimatore standard e non distorto; la regressione lineare sull'istogramma log-log è distorta e dipende dal binning.
+- **Risultato:** la relazione di Lacasa γ = 3 − 2H non è riprodotta né a N = 512 né a N = 16384 con questo stimatore (vedi notebook 02). Approccio 2a peggiore della baseline: risultato negativo, spiegato.
+
+### D-22 — Ricalibrazione lineare sul train come baseline "fisica + 2 parametri" · 2026-11-06 · notebook 02
+- **Scelta:** per ogni stimatore Ĥ, retta H = a + b Ĥ fittata sul solo train.
+- **Perché:** separa due cose diverse: l'informazione contenuta nella stima (misurata dopo la ricalibrazione) e il suo bias (corretto dalla retta). Un modello ibrido deve battere la versione ricalibrata, non solo quella grezza.
+- **Scartate:** ricalibrazione non lineare (isotonica, polinomiale) → più parametri; la scelta lineare è la più semplice e, per DFA e R/S, sufficiente (residui senza struttura nel grafico bias-vs-H).
+
+### D-23 — Le previsioni non vengono tagliate in [0, 1] · 2026-11-06 · notebook 02
+- **Scelta:** le stime grezze possono uscire dall'intervallo fisico e restano così nelle metriche.
+- **Perché:** tagliarle migliorerebbe artificialmente metodi che sbagliano molto (es. Lacasa) e nasconderebbe il problema nei grafici.
+
+### D-24 — DFA grezza come riferimento classico · 2026-11-06 · notebook 02
+- **Scelta:** il riferimento "solo fisica" per le reti è la DFA grezza.
+- **Perché:** DFA grezza, DFA ricalibrata e R/S ricalibrato hanno lo stesso RMSE entro l'intervallo di confidenza (0.053–0.054 in quick); per la regola del corso si sceglie il più semplice, che non impara alcun parametro.
