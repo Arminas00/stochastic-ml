@@ -1,0 +1,14 @@
+# Ambiente e cache
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Dati generati (si rigenerano dai seed)
+data/
+*.npz
+*.pt
+
+# Materiale del corso: mai nel repository (copyright, dimensioni)
+*.pdf
+*.h5
