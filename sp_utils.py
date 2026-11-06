@@ -448,3 +448,181 @@ def load_or_make_features(ds: dict, mode: str, seed: int, data_dir: str | Path =
             print(f"  feature {split:>11}: {len(d['X'])} serie in {time.time() - t0:.1f} s")
     np.savez_compressed(path, **{f"{s}__{f}": v for s, d in out.items() for f, v in d.items()})
     return out
+
+
+# =============================================================================
+# 9. Reti neurali (PyTorch): modelli, normalizzazione, training con early stopping
+# =============================================================================
+
+def get_device():
+    import torch
+    return torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+
+def make_deterministic(seed: int) -> None:
+    """Seed ovunque + algoritmi deterministici dove possibile (su GPU alcune
+    operazioni restano non bit-esatte: lo dichiariamo, D-11)."""
+    import torch
+    set_seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+    torch.use_deterministic_algorithms(True, warn_only=True)
+
+
+def normalize_series(X: np.ndarray, how: str, train_scale: float | None = None) -> np.ndarray:
+    """Normalizzazione degli input della CNN (D-19, D-26).
+    'per_serie': ogni serie a media 0 e deviazione standard 1 (toglie l'ampiezza).
+    'globale'  : divisione per un'unica scala calcolata sul train (conserva l'ampiezza)."""
+    X = np.asarray(X, dtype=np.float32)
+    if how == "per_serie":
+        return (X - X.mean(axis=1, keepdims=True)) / X.std(axis=1, keepdims=True)
+    if how == "globale":
+        return X / np.float32(train_scale)
+    raise ValueError(how)
+
+
+class FeatureScaler:
+    """Standardizzazione delle feature con media/deviazione del train; NaN -> mediana del train."""
+
+    def fit(self, F: np.ndarray):
+        F = np.asarray(F, dtype=np.float64)
+        self.median = np.nanmedian(F, axis=0)
+        Ff = np.where(np.isfinite(F), F, self.median)
+        self.mean, self.std = Ff.mean(axis=0), Ff.std(axis=0) + 1e-12
+        return self
+
+    def transform(self, F: np.ndarray) -> np.ndarray:
+        F = np.asarray(F, dtype=np.float64)
+        Ff = np.where(np.isfinite(F), F, self.median)
+        return ((Ff - self.mean) / self.std).astype(np.float32)
+
+
+def _torch_modules():
+    import torch
+    import torch.nn as nn
+
+    class CNN1D(nn.Module):
+        """CNN 1D: blocchi [Conv-BN-ReLU-Conv-BN-ReLU-MaxPool], pooling globale (media e max
+        sul tempo) -> funziona con qualsiasi lunghezza N. `n_extra` > 0 aggiunge feature
+        esterne concatenate prima della testa densa (fusione tardiva, modello ibrido D-12)."""
+
+        def __init__(self, width=32, n_blocks=4, kernel=7, n_extra=0, dropout=0.1):
+            super().__init__()
+            layers, c_in = [], 1
+            for b in range(n_blocks):
+                c_out = width * min(2 ** b, 4)
+                layers += [nn.Conv1d(c_in, c_out, kernel, padding=kernel // 2), nn.BatchNorm1d(c_out), nn.ReLU(),
+                           nn.Conv1d(c_out, c_out, kernel, padding=kernel // 2), nn.BatchNorm1d(c_out), nn.ReLU(),
+                           nn.MaxPool1d(2)]
+                c_in = c_out
+            self.features = nn.Sequential(*layers)
+            self.n_extra = n_extra
+            self.head = nn.Sequential(nn.Linear(2 * c_in + n_extra, 64), nn.ReLU(), nn.Dropout(dropout), nn.Linear(64, 1))
+
+        def forward(self, x, extra=None):
+            h = self.features(x.unsqueeze(1))
+            z = torch.cat([h.mean(dim=2), h.amax(dim=2)], dim=1)
+            if self.n_extra:
+                z = torch.cat([z, extra], dim=1)
+            return self.head(z).squeeze(1)
+
+    class MLP(nn.Module):
+        """Percettrone multistrato su un vettore di feature."""
+
+        def __init__(self, n_in, hidden=64, n_layers=2, dropout=0.1):
+            super().__init__()
+            layers, d = [], n_in
+            for _ in range(n_layers):
+                layers += [nn.Linear(d, hidden), nn.ReLU(), nn.Dropout(dropout)]
+                d = hidden
+            layers.append(nn.Linear(d, 1))
+            self.net = nn.Sequential(*layers)
+
+        def forward(self, x, extra=None):
+            return self.net(x).squeeze(1)
+
+    return CNN1D, MLP
+
+
+def build_model(kind: str, **kw):
+    CNN1D, MLP = _torch_modules()
+    return {"cnn": CNN1D, "mlp": MLP}[kind](**kw)
+
+
+def count_params(model) -> int:
+    return sum(p.numel() for p in model.parameters())
+
+
+def train_regressor(model, X_tr, y_tr, X_val, y_val, *, E_tr=None, E_val=None, lr=1e-3,
+                    batch_size=128, max_epochs=40, patience=6, weight_decay=1e-4, seed=0,
+                    verbose=False):
+    """Addestra un modello di regressione con perdita MSE sul target standardizzato.
+
+    - Target standardizzato con media/deviazione del train (y_mu, y_sd salvati nel modello).
+    - Adam + riduzione del learning rate a metà se l'RMSE di validazione non migliora per 3 epoche.
+    - Early stopping sull'RMSE di validazione (pazienza `patience`), ripristino dei pesi migliori.
+    Il validation set serve SOLO a questo (D-15). E_tr/E_val: feature extra (modello ibrido).
+    Restituisce (modello, storia)."""
+    import copy
+    import time
+
+    import torch
+
+    make_deterministic(seed)
+    dev = get_device()
+    model = model.to(dev)
+    y_mu, y_sd = float(np.mean(y_tr)), float(np.std(y_tr))
+    model.y_mu, model.y_sd = y_mu, y_sd
+
+    def T(a):
+        return None if a is None else torch.as_tensor(np.asarray(a, dtype=np.float32))
+
+    Xt, Yt, Et = T(X_tr), T((np.asarray(y_tr) - y_mu) / y_sd), T(E_tr)
+    opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
+    sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, factor=0.5, patience=3)
+    gen = torch.Generator().manual_seed(seed)
+    best, best_state, wait, hist = np.inf, None, 0, []
+    for epoch in range(max_epochs):
+        t0 = time.time()
+        model.train()
+        perm = torch.randperm(len(Xt), generator=gen)
+        tot = 0.0
+        for i in range(0, len(Xt), batch_size):
+            idx = perm[i:i + batch_size]
+            xb, yb = Xt[idx].to(dev), Yt[idx].to(dev)
+            eb = Et[idx].to(dev) if Et is not None else None
+            opt.zero_grad()
+            loss = torch.mean((model(xb, eb) - yb) ** 2)
+            loss.backward()
+            opt.step()
+            tot += loss.item() * len(idx)
+        p_val = predict(model, X_val, E_val)
+        rmse_val = float(np.sqrt(np.mean((p_val - np.asarray(y_val)) ** 2)))
+        rmse_tr = float(np.sqrt(tot / len(Xt))) * y_sd
+        sched.step(rmse_val)
+        hist.append({"epoch": epoch + 1, "rmse_train": rmse_tr, "rmse_val": rmse_val,
+                     "lr": opt.param_groups[0]["lr"], "s": time.time() - t0})
+        if verbose:
+            print(f"  epoca {epoch + 1:3d}  train {rmse_tr:.4f}  val {rmse_val:.4f}  ({hist[-1]['s']:.1f} s)")
+        if rmse_val < best - 1e-5:
+            best, best_state, wait = rmse_val, copy.deepcopy(model.state_dict()), 0
+        else:
+            wait += 1
+            if wait >= patience:
+                break
+    model.load_state_dict(best_state)
+    return model, hist
+
+
+def predict(model, X, E=None, batch_size=512) -> np.ndarray:
+    """Previsioni nella scala originale del target."""
+    import torch
+    dev = next(model.parameters()).device
+    model.eval()
+    out = []
+    with torch.no_grad():
+        for i in range(0, len(X), batch_size):
+            xb = torch.as_tensor(np.asarray(X[i:i + batch_size], dtype=np.float32)).to(dev)
+            eb = None if E is None else torch.as_tensor(np.asarray(E[i:i + batch_size], dtype=np.float32)).to(dev)
+            out.append(model(xb, eb).cpu().numpy())
+    return np.concatenate(out) * model.y_sd + model.y_mu

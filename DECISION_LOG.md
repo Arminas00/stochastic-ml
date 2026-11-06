@@ -104,3 +104,31 @@ Formato: **D-numero — titolo** · data · *Scelta* / *Perché* / *Alternative 
 ### D-24 — DFA grezza come riferimento classico · 2026-11-06 · notebook 02
 - **Scelta:** il riferimento "solo fisica" per le reti è la DFA grezza.
 - **Perché:** DFA grezza, DFA ricalibrata e R/S ricalibrato hanno lo stesso RMSE entro l'intervallo di confidenza (0.053–0.054 in quick); per la regola del corso si sceglie il più semplice, che non impara alcun parametro.
+
+### D-25 — Architettura della CNN 1D · 2026-11-06 · notebook 03
+- **Scelta:** 4 blocchi [Conv1d(k=7)–BN–ReLU ×2, MaxPool(2)], canali che raddoppiano fino a 4× la larghezza base, pooling globale (media + massimo sul tempo), testa densa 64→1. Input: incrementi (fGn).
+- **Perché:** il campo recettivo finale (~200 punti) copre le scale su cui DFA e R/S misurano la legge di potenza; il pooling globale rende la rete indipendente da N (necessario per la prova di robustezza in lunghezza) e invariante per traslazione temporale, come deve essere per un processo a incrementi stazionari. Gli incrementi sono stazionari, il fBm no: la rete non deve imparare a gestire una deriva della scala lungo la serie.
+- **Scartate:** testa densa sull'intera serie appiattita (dipende da N, molti più parametri); reti ricorrenti LSTM/GRU (più lente da addestrare, nessun vantaggio atteso per una statistica di scala); input fBm (non stazionario).
+
+### D-26 — Normalizzazione per serie degli input della CNN · 2026-11-06 · notebook 03
+- **Scelta:** ogni serie a media 0 e deviazione standard 1, anche se la normalizzazione globale dovesse dare un RMSE leggermente migliore.
+- **Perché:** nelle simulazioni la varianza del fGn è sempre 1, quindi con la normalizzazione globale la varianza campionaria (1 − N^(2H−2), notebook 01) diventa un indizio di H che esiste solo nella simulazione: su dati reali l'ampiezza è arbitraria. Un modello che lo usa non si trasferisce. H è un esponente invariante di scala: l'input giusto è invariante di scala.
+- **Verifica:** entrambe le normalizzazioni sono addestrate e confrontate nel notebook 03, per misurare quanto vale l'indizio.
+
+### D-27 — Stesso sforzo di tuning per tutti i modelli · 2026-11-06 · notebook 03
+- **Scelta:** per CNN, MLP e gradient boosting, due configurazioni di iperparametri ciascuno, scelta sul validation con un seed fisso, poi ensemble di 5 seed (3 in quick) sulla configurazione scelta. Il gradient boosting è deterministico: un solo modello.
+- **Perché:** la regola del corso confronta approcci; un modello più ottimizzato degli altri vincerebbe per lo sforzo, non per la rappresentazione.
+- **Scartate:** ricerca estesa degli iperparametri (costo, e rischio di sovradattare il validation).
+
+### D-28 — Modelli sulle feature: MLP e gradient boosting, tre gruppi di feature · 2026-11-06 · notebook 03
+- **Scelta:** feature classiche (DFA, R/S e curve su 12 scale), feature del grafo (16), tutte (42); MLP e `HistGradientBoostingRegressor`.
+- **Perché:** il gruppo "grafo" misura quanto della informazione su H sopravvive nei grafi quando si usa più di un esponente (risposta al fallimento di Lacasa, notebook 02); il gruppo "classiche" è la cella "solo fisica + apprendimento" del disegno 2×2. Il gradient boosting è il modello su feature tabellari visto nel corso, robusto e quasi senza tuning.
+
+### D-29 — Punto aperto: l'incertezza dell'ensemble non è calibrata · 2026-11-06 · notebook 03
+- **Risultato:** copertura di ±2σ tra 25% e 60% (attesa 95%), correlazione tra σ dell'ensemble ed errore ≈ 0. L'ensemble misura solo l'incertezza del modello, non quella della traiettoria.
+- **Da decidere:** se aggiungere una testa che predice anche la varianza (perdita gaussiana NLL) per avere barre d'errore per singola serie, utile nel capitolo sui dati reali.
+
+### D-30 — Limite noto: i modelli sulle feature sono legati alla lunghezza N del train · 2026-11-06 · notebook 03
+- **Risultato:** RMSE 0.13–0.29 appena N cambia, contro una CNN che resta stabile.
+- **Perché:** le scale di DFA/R-S sono scelte relative a N (fino a N/4) e le feature del grafo (grado medio, grado massimo) crescono con N: lo stesso numero di colonna ha un significato diverso a N diversi.
+- **Alternativa possibile (non fatta):** scale assolute fisse comuni a tutte le lunghezze e feature del grafo normalizzate per N. Per ora si dichiara il limite.
