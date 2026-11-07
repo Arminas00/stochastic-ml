@@ -335,7 +335,34 @@ for a, b in [("3 CNN (per_serie)", "5 CNN ibrida-min"), ("3 CNN (per_serie)", "5
     print(f"{b:<40} vs {a:<26}: {100 * (R[b] / R[a] - 1):+5.0f}%")
 '''),
 ("md", r"""
-SUMMARY_PLACEHOLDER
+### Cosa abbiamo imparato (modalità quick: N = 512, 3 semi per le CNN, 2 per la GNN)
+
+**Tabella 2×2 (RMSE di test su H).**
+
+| | senza feature fisiche | 4 stime fisiche | 42 feature fisiche |
+|---|---|---|---|
+| senza serie grezza | baseline 0.259 | GBT 0.045 | GBT 0.026 |
+| con serie grezza | CNN 0.031 | CNN ibrida-min 0.032 | CNN ibrida-full 0.026 |
+
+- **Le 4 stime fisiche non aggiungono nulla alla CNN a N = 512.** L'ibrida-min (0.032 [0.031, 0.033]) è alla pari con la CNN da sola (0.031 [0.030, 0.032]). La CNN estrae già dalla serie l'informazione contenuta in DFA e R/S.
+- **L'ibrida-full (0.0256 [0.025, 0.026]) è la migliore in assoluto**, ma gli intervalli si sovrappongono con il GBT sulle stesse 42 feature senza serie grezza (0.0263 [0.025, 0.027]). Per la regola del corso, a parità di prestazioni vince il modello più semplice: il GBT sulle feature, senza rete convoluzionale.
+- **La variante residuo** (la rete impara la correzione H − H_DFA) è peggiore (0.034). Partire dalla DFA come offset non aiuta: la correzione da imparare non è più semplice di H stesso.
+- **GNN ibrida:** 0.036 → 0.035 (−3%), entro l'incertezza. Nessun guadagno chiaro.
+
+**Il modello usa davvero la fisica? (test di permutazione).**
+- Rimescolando una stima alla volta sul test, l'RMSE dell'ibrida-min sale molto per H_DFA (0.032 → 0.060) e H_R/S (→ 0.062), un po' per λ HVG (→ 0.041), e non cambia per γ NVG (0.032). Lo stimatore di Lacasa, già fallito nel notebook 02, viene ignorato.
+- Rimescolandole tutte, l'RMSE arriva a 0.121, molto peggio della CNN senza stime (0.031). La rete **si appoggia** sulle stime fisiche ed è ridondante con la serie, ma non ne trae un'informazione nuova: a parità di prestazioni, ha spostato parte del lavoro sulle stime.
+
+**Robustezza in N: qui l'ibrido fa la differenza.**
+- L'ibrida-min generalizza **meglio di tutti** verso serie più lunghe: 0.023 a N = 1024 e 0.020 a N = 2048, contro 0.028 e 0.031 della CNN e 0.034 della DFA. Le stime DFA/R-S sono intensive (migliorano con N), e la rete che si appoggia su di esse eredita questa proprietà.
+- L'ibrida-full **collassa** (0.148 a N = 2048), come il GBT sulle feature "tutte" (0.136, notebook 03). Le curve log F(s) e log R/S sono calcolate su scale che dipendono da N (D-30), quindi il modello impara il loro aspetto a N = 512.
+- Verso serie più corte (N = 128) nessun ibrido batte la CNN (0.079); la GNN ibrida è la migliore (0.071).
+
+**Conclusione.**
+- A lunghezza fissa, aggiungere la fisica come input non migliora la CNN in modo significativo. Il miglior risultato (≈ 0.026) si ottiene sia con l'ibrida-full sia con il GBT sulle sole feature, e la regola del corso premia il GBT.
+- Il valore dell'ibrido è la **robustezza**: con le 4 stime fisiche intensive, il modello resta accurato anche fuori dalla lunghezza di addestramento. È l'argomento più forte per l'approccio ibrido all'esame.
+- Questo suggerisce la decisione aperta D-30: costruire feature indipendenti da N (es. pendenze invece delle curve) per avere insieme accuratezza e robustezza.
+- Caveat: modalità quick, pochi semi; i confronti entro ~5% non sono significativi. Numeri definitivi dalla modalità full.
 """),
 ]
 
