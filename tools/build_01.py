@@ -34,10 +34,10 @@ $dW_H(t) = W_H(t+1) - W_H(t)$ il rumore gaussiano frazionario (fGn).
 Tutti i numeri casuali derivano da `SEED`.
 """),
 ("code", r'''
-MODE = "quick"          # "quick" (CPU, verifica) oppure "full" (dataset definitivo)
+MODE = os.environ.get("SP_MODE", "quick")   # "quick" (CPU, verifica) o "full" (definitivo); il runner Colab imposta SP_MODE=full
 SEED = 2026             # seed principale: gli split usano SEED, SEED+1, SEED+2
 DATA_DIR = "data"       # dati generati (non versionati: si rigenerano dai seed)
-FIG_DIR = "figures"     # figure salvate per la relazione finale
+FIG_DIR = "figures" if MODE == "quick" else f"figures_{MODE}"   # figure separate per modalità
 
 # Numero di serie usate nelle verifiche (indipendenti dal dataset)
 N_CHECK_SERIES = 2000 if MODE == "quick" else 5000

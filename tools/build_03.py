@@ -52,10 +52,10 @@ che tutto giri (~15–20 minuti su un portatile senza GPU). I numeri definitivi 
 `full` su GPU.
 """),
 ("code", r'''
-MODE = "quick"          # deve coincidere con i notebook 01-02
+MODE = os.environ.get("SP_MODE", "quick")   # "quick" (CPU, verifica) o "full" (definitivo); il runner Colab imposta SP_MODE=full
 SEED = 2026
 DATA_DIR = "data"
-FIG_DIR = "figures"
+FIG_DIR = "figures" if MODE == "quick" else f"figures_{MODE}"   # figure separate per modalità
 N_BOOT = 1000
 
 if MODE == "quick":

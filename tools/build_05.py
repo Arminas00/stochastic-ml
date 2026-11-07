@@ -50,10 +50,10 @@ l'input aggiuntivo (D-36). È questo che rende l'ablazione pulita.
 Gli iperparametri non si cercano di nuovo: si riusano quelli scelti nei notebook 03 e 04 (letti dai pesi salvati).
 """),
 ("code", r'''
-MODE = "quick"
+MODE = os.environ.get("SP_MODE", "quick")   # "quick" (CPU, verifica) o "full" (definitivo); il runner Colab imposta SP_MODE=full
 SEED = 2026
 DATA_DIR = "data"
-FIG_DIR = "figures"
+FIG_DIR = "figures" if MODE == "quick" else f"figures_{MODE}"   # figure separate per modalità
 N_BOOT = 1000
 
 if MODE == "quick":

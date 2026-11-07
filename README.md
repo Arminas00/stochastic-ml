@@ -32,4 +32,8 @@ Le scelte e le loro motivazioni sono in [`DECISION_LOG.md`](DECISION_LOG.md).
 
 - **Colab:** aprire il notebook da GitHub, scegliere un runtime GPU, *Esegui tutto*.
 - **Locale (Windows/Linux):** `pip install -r requirements.txt`, poi eseguire il notebook.
-  Con `MODE = "quick"` nella cella di configurazione tutto gira su CPU in pochi minuti.
+  La modalità predefinita è `quick` (dataset ridotto, gira su CPU); si cambia con la variabile d'ambiente
+  `SP_MODE` (`quick` o `full`).
+- **Esecuzione completa:** `colab_full_run.ipynb` esegue 01–05 in modalità `full` su una GPU di Colab, con
+  salvataggio su Google Drive e ripresa dopo una disconnessione. I notebook eseguiti vanno in
+  `risultati_full/` e le figure in `figures_full/`; i notebook nella radice del repository restano in `quick`.

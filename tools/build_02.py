@@ -38,10 +38,10 @@ Il dataset è quello del notebook 01 (stessi `MODE` e `SEED`): se non è nella c
 rigenerato identico dai seed.
 """),
 ("code", r'''
-MODE = "quick"          # deve coincidere con il notebook 01
+MODE = os.environ.get("SP_MODE", "quick")   # "quick" (CPU, verifica) o "full" (definitivo); il runner Colab imposta SP_MODE=full
 SEED = 2026
 DATA_DIR = "data"
-FIG_DIR = "figures"
+FIG_DIR = "figures" if MODE == "quick" else f"figures_{MODE}"   # figure separate per modalità
 N_BOOT = 1000           # ricampionamenti bootstrap per gli intervalli di confidenza
 '''),
 ("code", r'''
