@@ -99,8 +99,8 @@ run("03_cnn_e_feature.ipynb"); show_outputs("03_cnn_e_feature.ipynb", 40)
 ## Stima del costo del notebook 04 (GNN)
 
 Prima di lanciare la GNN in `full` misuriamo il tempo di un'epoca su 2000 grafi e lo estrapoliamo a 40 000.
-Il limite superiore conta tutte le epoche massime: 2 configurazioni per la scelta + 4 varianti × 5 seed,
-fino a 40 epoche ciascuno. Con l'early stopping il tempo reale è di solito minore.
+Il limite superiore conta tutte le epoche massime: 2 configurazioni per la scelta + 4 varianti × 3 seed,
+fino a 25 epoche ciascuno (D-37). Con l'early stopping il tempo reale è di solito minore.
 """),
 ("code", r'''
 import numpy as np, torch, sp_utils as u
@@ -119,7 +119,8 @@ for kind, series in [("nvg", "fbm"), ("hvg", "fgn")]:
         print(f"{kind} {hp}: costruzione grafi {tb * 66_000 / n / 60:.1f} min (tutti gli split), "
               f"epoca su 40k ≈ {te * 40_000 / n / 60:.2f} min")
 ep = np.mean([est[("nvg", 64)], est[("hvg", 64)]])
-print(f"Limite superiore notebook 04: ≈ {(2 * 40 * est[('nvg', 64)] + 2 * 5 * 40 * (est[('nvg', 64)] + est[('hvg', 64)])) / 3600:.1f} ore")
+print(f"Limite superiore notebook 04 (3 seed, 25 epoche, D-37): ≈ "
+      f"{(25 * (est[('nvg', 32)] + est[('nvg', 64)]) + 2 * 3 * 25 * (est[('nvg', 64)] + est[('hvg', 64)])) / 3600:.1f} ore")
 '''),
 ("md", r"""
 ## 04–05: GNN e modello ibrido

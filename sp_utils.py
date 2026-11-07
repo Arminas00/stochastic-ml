@@ -671,11 +671,12 @@ def predict(model, X, E=None, batch_size=512) -> np.ndarray:
 # =============================================================================
 
 class GraphSet:
-    """Insieme di grafi di visibilità in forma compatta (archi non orientati in int32, una sola
+    """Insieme di grafi di visibilità in forma compatta (archi non orientati in uint16, una sola
     direzione), convertiti in tensori PyTorch solo al momento di formare il batch.
-    Serve a stare nella RAM di Colab con 40 000 grafi da 1024 nodi (D-32).
+    Serve a stare nella RAM di Colab con 40 000 grafi da 1024 nodi (D-32, D-38).
 
-    edges[i]: (E_i, 2) int32;  x[i]: (N_i, F) float32 feature dei nodi."""
+    edges[i]: (E_i, 2) uint16;  x[i]: (N_i, F) float32 feature dei nodi (x può essere una
+    lista o un oggetto NodeFeatures che le calcola al volo)."""
 
     def __init__(self, edges: list, x: list):
         self.edges, self.x = edges, x
@@ -704,32 +705,50 @@ class GraphSet:
 
 def build_graphs(X_fgn: np.ndarray, kind: str, series: str) -> tuple[list, list, list]:
     """Costruisce i grafi di visibilità ('nvg'/'hvg') del fBm o del fGn di ogni riga di X_fgn.
-    Restituisce (lista archi int32, lista gradi, lista valori della serie normalizzati per serie)."""
+    Restituisce (lista archi uint16, lista gradi uint16, lista valori della serie normalizzati per serie).
+    Indici e gradi stanno in 16 bit perché N <= 65535: metà della memoria di int32 (D-38)."""
     from ts2vg import HorizontalVG, NaturalVG
     cls = NaturalVG if kind == "nvg" else HorizontalVG
+    X_fgn = np.asarray(X_fgn)
+    if X_fgn.shape[1] > np.iinfo(np.uint16).max:
+        raise ValueError("Serie troppo lunghe per indici a 16 bit")
     edges, degs, vals = [], [], []
-    for x in np.asarray(X_fgn, dtype=np.float64):
+    for x in X_fgn:
+        x = np.asarray(x, dtype=np.float64)
         s = fbm_from_fgn(x) if series == "fbm" else x
         g = cls(); g.build(s)
-        edges.append(np.asarray(g.edges, dtype=np.int32).reshape(-1, 2))
-        degs.append(np.asarray(g.degrees))
+        edges.append(np.asarray(g.edges, dtype=np.uint16).reshape(-1, 2))
+        degs.append(np.asarray(g.degrees, dtype=np.uint16))
         vals.append(((s - s.mean()) / s.std()).astype(np.float32))
     return edges, degs, vals
 
 
-def node_features(degs: list, vals: list, which: str, deg_mu: float, deg_sd: float) -> list:
+class NodeFeatures:
+    """Feature dei nodi calcolate al volo da gradi e valori (si comporta come una lista).
+    Evita di tenere in memoria una copia delle feature per ogni variante (D-38)."""
+
+    def __init__(self, degs: list, vals: list, which: str, deg_mu: float, deg_sd: float):
+        if which not in ("grado", "grado+valori"):
+            raise ValueError(which)
+        self.degs, self.vals, self.which, self.mu, self.sd = degs, vals, which, deg_mu, deg_sd
+
+    def __len__(self):
+        return len(self.degs)
+
+    def __getitem__(self, i):
+        f = ((np.log(self.degs[i].astype(np.float32)) - self.mu) / self.sd).astype(np.float32)
+        if self.which == "grado":
+            return f[:, None]
+        return np.column_stack([f, self.vals[i]])
+
+
+def node_features(degs: list, vals: list, which: str, deg_mu: float, deg_sd: float) -> NodeFeatures:
     """Feature dei nodi (D-33):
       'grado'        -> log(k), standardizzato con media/dev. del train;
       'grado+valori' -> in più il valore della serie nel nodo (normalizzato per serie).
     Con il solo grado la GNN vede solo la topologia del grafo, che è invariante per
     riscalamento (NVG e HVG) e per trend lineare (NVG): non può vedere l'ampiezza."""
-    out = []
-    for k, v in zip(degs, vals):
-        f = [(np.log(k) - deg_mu) / deg_sd]
-        if which == "grado+valori":
-            f.append(v)
-        out.append(np.column_stack(f).astype(np.float32))
-    return out
+    return NodeFeatures(degs, vals, which, deg_mu, deg_sd)
 
 
 def _gin_module():
