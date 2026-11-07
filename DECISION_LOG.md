@@ -128,7 +128,37 @@ Formato: **D-numero — titolo** · data · *Scelta* / *Perché* / *Alternative 
 - **Risultato:** copertura di ±2σ tra 25% e 60% (attesa 95%), correlazione tra σ dell'ensemble ed errore ≈ 0. L'ensemble misura solo l'incertezza del modello, non quella della traiettoria.
 - **Da decidere:** se aggiungere una testa che predice anche la varianza (perdita gaussiana NLL) per avere barre d'errore per singola serie, utile nel capitolo sui dati reali.
 
-### D-30 — Limite noto: i modelli sulle feature sono legati alla lunghezza N del train · 2026-11-06 · notebook 03
-- **Risultato:** RMSE 0.13–0.29 appena N cambia, contro una CNN che resta stabile.
-- **Perché:** le scale di DFA/R-S sono scelte relative a N (fino a N/4) e le feature del grafo (grado medio, grado massimo) crescono con N: lo stesso numero di colonna ha un significato diverso a N diversi.
-- **Alternativa possibile (non fatta):** scale assolute fisse comuni a tutte le lunghezze e feature del grafo normalizzate per N. Per ora si dichiara il limite.
+### D-30 — Limite noto: i modelli sulle curve DFA/R-S sono legati alla lunghezza N del train · 2026-11-06 · notebook 03 (corretto il 2026-11-07)
+- **Risultato:** i modelli con le feature "classiche" o "tutte" hanno RMSE 0.13–0.29 appena N cambia; il modello sulle sole feature del grafo invece regge e migliora con N (0.023 a N = 2048). La CNN resta stabile.
+- **Perché:** le scale di DFA/R-S sono scelte relative a N (fino a N/4): la stessa colonna ha un significato diverso a N diversi. Le feature del grafo sono quasi tutte intensive (esponente della coda, frazione di nodi con grado 2 o 3, dispersione dei gradi).
+- **Correzione:** una prima versione di questa voce attribuiva il problema a tutte le feature, compreso il grafo; il notebook 04 ha mostrato che non è così.
+- **Alternativa possibile (non fatta):** scale assolute fisse comuni a tutte le lunghezze. Per ora si dichiara il limite.
+
+### D-31 — GNN: Graph Isomorphism Network con lettura a ogni strato · 2026-11-06 · notebook 04
+- **Scelta:** strati GINConv (aggregazione a somma + MLP, ε addestrabile), BatchNorm, ReLU; lettura per grafo con media e massimo dei nodi dopo ogni strato, concatenate; testa densa 64→1.
+- **Perché:** l'informazione su H nei grafi di visibilità sta nella distribuzione dei gradi e nelle loro correlazioni; l'aggregazione a somma permette di contarli (GIN è espressiva quanto il test di Weisfeiler–Lehman), mentre la media normalizzata della GCN li cancella in parte. Leggere tutti gli strati combina informazione locale e di vicinato più ampio. Il pooling globale rende la rete indipendente dal numero di nodi, come la CNN.
+- **Scartate:** GCN (aggregazione normalizzata, meno espressiva sui gradi); GAT (attenzione: più parametri e più lenta, nessun vantaggio atteso su grafi senza feature ricche); pooling gerarchico (DiffPool, ecc.: costoso su grafi da 1000 nodi).
+
+### D-32 — Grafi in forma compatta, convertiti a tensori solo per il batch · 2026-11-06 · notebook 04
+- **Scelta:** archi in int32 e in una sola direzione; il batch PyG (grafo disconnesso + vettore `batch`) si forma al volo.
+- **Perché:** la NVG di 40 000 fBm da 1024 nodi ha milioni di archi; in int64 e nei due versi (formato standard di PyG) occuperebbe 4× la memoria, oltre la RAM di Colab gratuito.
+
+### D-33 — Feature dei nodi: log del grado, con e senza valori della serie · 2026-11-06 · notebook 04
+- **Scelta:** variante principale con il solo log(k) standardizzato sul train; ablazione con in più il valore della serie nel nodo, normalizzato per serie.
+- **Perché:** con il solo grado la rete vede solo la topologia, quindi eredita le invarianze del grafo (verificate sulle previsioni nel notebook 04): è il test diretto di "cosa conserva e cosa perde la rappresentazione". I valori normalizzati per serie aggiungono la forma locale della serie senza reintrodurre l'ampiezza (coerente con D-26).
+- **Due grafi:** NVG del fBm (la scelta di Lacasa et al.) e HVG del fGn (il grafo il cui esponente λ era più informativo nel notebook 02).
+
+### D-34 — GNN: iperparametri scelti sulla variante principale e riusati per le altre · 2026-11-06 · notebook 04
+- **Scelta:** due configurazioni provate su NVG(fBm) con il solo grado; la migliore sul validation è usata per tutte e quattro le varianti.
+- **Perché:** la GNN è il modello più costoso (≈ 20 s per epoca su CPU in quick); ripetere la ricerca per ogni variante quadruplicherebbe il costo. Lo sforzo di tuning resta paragonabile a quello della CNN (due configurazioni). Le varianti senza ricerca propria sono, se mai, svantaggiate: un loro risultato positivo è conservativo.
+
+### D-36 — Modello ibrido: due insiemi di feature, variante a residuo, GNN ibrida · 2026-11-07 · notebook 05
+- **Scelta (concordata):** ibrido-min (le 4 stime fisiche del piano: H_DFA, H_R/S, γ della NVG, λ della HVG) e ibrido-full (tutte le 42 feature); variante a residuo (target H − H_DFA); GNN ibrida solo per la variante migliore sul validation. Fusione tardiva: feature concatenate prima della testa densa. Architettura, iperparametri, seed e addestramento identici alla rete senza feature, quindi nessuna nuova ricerca di iperparametri.
+- **Perché:** l'unica differenza tra rete e ibrido è l'input aggiuntivo, quindi la differenza di prestazioni misura il contributo della fisica. Min vs full dice se alla rete servono le stime o le curve complete. Il residuo verifica l'idea "impara una correzione". Un test di permutazione misura quanto l'ibrido usa davvero ciascuna feature.
+- **Scartate:** fusione precoce (feature come canali aggiuntivi della serie: le feature sono scalari per serie, non segnali nel tempo); ibrido per tutte e quattro le GNN (≈ 4× il costo).
+
+### D-35 — GNN con LayerNorm invece di BatchNorm · 2026-11-07 · notebook 04
+- **Problema osservato:** con BatchNorm l'RMSE di validazione della GNN oscillava tra 0.09 e 0.27 da un'epoca all'altra mentre quello di train era stabile (curve nel primo run del notebook 04). Le statistiche di BatchNorm sono calcolate su tutti i nodi del batch, dominate dai grafi con più nodi e dagli hub di grado alto: in valutazione (statistiche medie) la rete vede una distribuzione diversa da quella di training. Con un validation così rumoroso l'early stopping sceglie un'epoca a caso.
+- **Scelta:** LayerNorm, che normalizza ogni nodo separatamente e si comporta allo stesso modo in training e valutazione.
+- **Verifica:** HVG(fGn), solo grado, 10 epoche: validation con BatchNorm 0.38→0.19 con salti fino a ×2; con LayerNorm decrescente in modo regolare fino a 0.083. Il livello finale è simile: la correzione stabilizza l'addestramento, non "regala" prestazioni.
+- **Nota di onestà:** la correzione è stata fatta dopo il primo run completo del notebook 04, i cui numeri di test erano quindi già stati visti (GNN migliore: RMSE 0.041). È motivata da un difetto di addestramento evidente nelle curve di validation e il confronto BatchNorm/LayerNorm è stato fatto solo sul validation; non è una ricerca di iperparametri guidata dal test. I numeri del primo run sono riportati qui per trasparenza: NVG(fBm) grado 0.063, NVG(fBm) grado+valori 0.056, HVG(fGn) grado 0.118, HVG(fGn) grado+valori 0.041.

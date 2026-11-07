@@ -577,7 +577,9 @@ def train_regressor(model, X_tr, y_tr, X_val, y_val, *, E_tr=None, E_val=None, l
     def T(a):
         return None if a is None else torch.as_tensor(np.asarray(a, dtype=np.float32))
 
-    Xt, Yt, Et = T(X_tr), T((np.asarray(y_tr) - y_mu) / y_sd), T(E_tr)
+    is_graph = isinstance(X_tr, GraphSet)
+    Xt = X_tr if is_graph else T(X_tr)
+    Yt, Et = T((np.asarray(y_tr) - y_mu) / y_sd), T(E_tr)
     opt = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     sched = torch.optim.lr_scheduler.ReduceLROnPlateau(opt, factor=0.5, patience=3)
     gen = torch.Generator().manual_seed(seed)
@@ -589,7 +591,8 @@ def train_regressor(model, X_tr, y_tr, X_val, y_val, *, E_tr=None, E_val=None, l
         tot = 0.0
         for i in range(0, len(Xt), batch_size):
             idx = perm[i:i + batch_size]
-            xb, yb = Xt[idx].to(dev), Yt[idx].to(dev)
+            xb = Xt.batch(idx.numpy(), dev) if is_graph else Xt[idx].to(dev)
+            yb = Yt[idx].to(dev)
             eb = Et[idx].to(dev) if Et is not None else None
             opt.zero_grad()
             loss = torch.mean((model(xb, eb) - yb) ** 2)
@@ -622,7 +625,120 @@ def predict(model, X, E=None, batch_size=512) -> np.ndarray:
     out = []
     with torch.no_grad():
         for i in range(0, len(X), batch_size):
-            xb = torch.as_tensor(np.asarray(X[i:i + batch_size], dtype=np.float32)).to(dev)
+            if isinstance(X, GraphSet):
+                xb = X.batch(np.arange(i, min(i + batch_size, len(X))), dev)
+            else:
+                xb = torch.as_tensor(np.asarray(X[i:i + batch_size], dtype=np.float32)).to(dev)
             eb = None if E is None else torch.as_tensor(np.asarray(E[i:i + batch_size], dtype=np.float32)).to(dev)
             out.append(model(xb, eb).cpu().numpy())
     return np.concatenate(out) * model.y_sd + model.y_mu
+
+
+# =============================================================================
+# 10. Grafi per la GNN: insieme di grafi compatto, feature dei nodi, modello GIN
+# =============================================================================
+
+class GraphSet:
+    """Insieme di grafi di visibilità in forma compatta (archi non orientati in int32, una sola
+    direzione), convertiti in tensori PyTorch solo al momento di formare il batch.
+    Serve a stare nella RAM di Colab con 40 000 grafi da 1024 nodi (D-32).
+
+    edges[i]: (E_i, 2) int32;  x[i]: (N_i, F) float32 feature dei nodi."""
+
+    def __init__(self, edges: list, x: list):
+        self.edges, self.x = edges, x
+
+    def __len__(self):
+        return len(self.x)
+
+    def n_edges(self) -> np.ndarray:
+        return np.array([len(e) for e in self.edges])
+
+    def batch(self, idx, dev):
+        """Unisce i grafi `idx` in un unico grafo disconnesso (convenzione di PyG):
+        restituisce (x, edge_index orientato nei due versi, vettore batch)."""
+        import torch
+        xs, es, bs, off = [], [], [], 0
+        for j, i in enumerate(idx):
+            xi, ei = self.x[i], self.edges[i].astype(np.int64) + off
+            xs.append(xi); es.append(ei); bs.append(np.full(len(xi), j, dtype=np.int64))
+            off += len(xi)
+        e = np.concatenate(es)
+        edge_index = np.concatenate([e, e[:, ::-1]]).T            # archi nei due versi
+        return (torch.as_tensor(np.concatenate(xs)).to(dev),
+                torch.as_tensor(np.ascontiguousarray(edge_index)).to(dev),
+                torch.as_tensor(np.concatenate(bs)).to(dev))
+
+
+def build_graphs(X_fgn: np.ndarray, kind: str, series: str) -> tuple[list, list, list]:
+    """Costruisce i grafi di visibilità ('nvg'/'hvg') del fBm o del fGn di ogni riga di X_fgn.
+    Restituisce (lista archi int32, lista gradi, lista valori della serie normalizzati per serie)."""
+    from ts2vg import HorizontalVG, NaturalVG
+    cls = NaturalVG if kind == "nvg" else HorizontalVG
+    edges, degs, vals = [], [], []
+    for x in np.asarray(X_fgn, dtype=np.float64):
+        s = fbm_from_fgn(x) if series == "fbm" else x
+        g = cls(); g.build(s)
+        edges.append(np.asarray(g.edges, dtype=np.int32).reshape(-1, 2))
+        degs.append(np.asarray(g.degrees))
+        vals.append(((s - s.mean()) / s.std()).astype(np.float32))
+    return edges, degs, vals
+
+
+def node_features(degs: list, vals: list, which: str, deg_mu: float, deg_sd: float) -> list:
+    """Feature dei nodi (D-33):
+      'grado'        -> log(k), standardizzato con media/dev. del train;
+      'grado+valori' -> in più il valore della serie nel nodo (normalizzato per serie).
+    Con il solo grado la GNN vede solo la topologia del grafo, che è invariante per
+    riscalamento (NVG e HVG) e per trend lineare (NVG): non può vedere l'ampiezza."""
+    out = []
+    for k, v in zip(degs, vals):
+        f = [(np.log(k) - deg_mu) / deg_sd]
+        if which == "grado+valori":
+            f.append(v)
+        out.append(np.column_stack(f).astype(np.float32))
+    return out
+
+
+def _gin_module():
+    import torch
+    import torch.nn as nn
+    from torch_geometric.nn import GINConv, global_max_pool, global_mean_pool
+
+    class GIN(nn.Module):
+        """Graph Isomorphism Network (Xu et al. 2019) per regressione a livello di grafo.
+        `n_layers` strati GINConv (aggregazione a somma + MLP), poi lettura per grafo con media e
+        massimo dei nodi a OGNI strato (concatenati), testa densa 64 -> 1.
+        `n_extra` > 0: feature esterne concatenate alla lettura (modello ibrido)."""
+
+        def __init__(self, n_in, hidden=32, n_layers=3, dropout=0.1, n_extra=0, norm="layer"):
+            super().__init__()
+            # norm: 'batch' (BatchNorm sui nodi del batch) o 'layer' (LayerNorm per nodo, D-35)
+            Norm = (lambda: nn.BatchNorm1d(hidden)) if norm == "batch" else (lambda: nn.LayerNorm(hidden))
+            self.convs, self.bns = nn.ModuleList(), nn.ModuleList()
+            d = n_in
+            for _ in range(n_layers):
+                mlp = nn.Sequential(nn.Linear(d, hidden), Norm(), nn.ReLU(), nn.Linear(hidden, hidden))
+                self.convs.append(GINConv(mlp, train_eps=True))
+                self.bns.append(Norm())
+                d = hidden
+            self.n_extra = n_extra
+            self.head = nn.Sequential(nn.Linear(2 * hidden * n_layers + n_extra, 64), nn.ReLU(),
+                                      nn.Dropout(dropout), nn.Linear(64, 1))
+
+        def forward(self, g, extra=None):
+            x, edge_index, batch = g
+            reads = []
+            for conv, bn in zip(self.convs, self.bns):
+                x = torch.relu(bn(conv(x, edge_index)))
+                reads += [global_mean_pool(x, batch), global_max_pool(x, batch)]
+            z = torch.cat(reads, dim=1)
+            if self.n_extra:
+                z = torch.cat([z, extra], dim=1)
+            return self.head(z).squeeze(1)
+
+    return GIN
+
+
+def build_gnn(**kw):
+    return _gin_module()(**kw)

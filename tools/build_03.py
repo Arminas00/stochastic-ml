@@ -314,7 +314,8 @@ feature calcolate alla nuova lunghezza. Tutti sono stati addestrati solo alla lu
 ("code", r'''
 lengths = sorted([CFG["N"]] + list(CFG["robust_lengths"]))
 split_of = {L: ("test" if L == CFG["N"] else f"test_N{L}") for L in lengths}
-rob = ["1a DFA", "3 CNN (per_serie)", "3 CNN (globale)", "3-GBT feature classiche", "3-GBT feature tutte", "3-MLP feature tutte"]
+rob = ["1a DFA", "3 CNN (per_serie)", "3 CNN (globale)", "3-GBT feature classiche", "3-GBT feature grafo",
+       "3-GBT feature tutte", "3-MLP feature tutte"]
 rows = []
 for name in rob:
     for L in lengths:
@@ -377,9 +378,12 @@ train: da ricontrollare sulla `full`)
   una testa che predice anche la varianza (perdita gaussiana NLL): candidata per il capitolo sui dati reali.
 - **Robustezza in lunghezza: la differenza più netta tra le rappresentazioni.** La CNN, grazie al pooling
   globale, funziona su tutte le lunghezze (a $N=2048$ è ancora leggermente meglio della DFA, pur senza
-  migliorare come la DFA). I modelli sulle feature crollano appena $N$ cambia (RMSE 0.13–0.29), perché le
-  feature dipendono da $N$: le scale della DFA vanno fino a $N/4$, il grado medio del grafo cresce con $N$.
-  Un modello sulle feature va addestrato alla lunghezza a cui si usa.
+  migliorare come la DFA). I modelli che usano le **curve classiche** crollano appena $N$ cambia
+  (RMSE 0.13–0.29), perché le scale della DFA e di R/S sono scelte relative a $N$ (fino a $N/4$): la stessa
+  colonna ha un significato diverso a $N$ diversi. Il modello sulle sole **feature del grafo** invece regge e
+  migliora con $N$ (RMSE 0.023 a $N=2048$): quasi tutte quelle feature sono grandezze intensive
+  (esponente della coda, frazione di nodi con grado 2 o 3, dispersione dei gradi) che non dipendono dalla
+  lunghezza. Un modello sulle curve classiche va addestrato alla lunghezza a cui si usa.
 
 **Decisioni di questo notebook:** D-25 architettura della CNN; D-26 normalizzazione per serie; D-27 stesso
 sforzo di tuning; D-28 modelli e gruppi di feature.
