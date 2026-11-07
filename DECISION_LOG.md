@@ -188,3 +188,9 @@ Formato: **D-numero — titolo** · data · *Scelta* / *Perché* / *Alternative 
 - **Scelta:** archi e gradi in uint16 (gli indici dei nodi sono < 65 536); feature dei nodi calcolate al volo da gradi e valori al momento del batch (`sp_utils.NodeFeatures`), invece di quattro copie in memoria. Stima: ≈ 3.0 GB per la NVG e 0.9 GB per l'HVG.
 - **Verifica:** gradi uguali a quelli ricavati dagli archi; feature uguali alla versione in float64 entro 3·10⁻⁷; addestramento e previsione di prova eseguiti. Il modello e i dati non cambiano: è solo una diversa rappresentazione in memoria. In quick, le statistiche di standardizzazione ora si calcolano in float32: differenze dell'ordine di 10⁻⁷.
 - Aggiorna D-32 (che prevedeva int32).
+
+### D-39 — Salvataggio dopo ogni modello addestrato (ripresa dopo una disconnessione) · 2026-11-07 · notebook 04, 05
+- **Problema:** dopo ≈ 1 h 15 min di addestramento della GNN in full, Colab ha disconnesso il runtime ("inattività o durata massima raggiunta"). Il notebook salvava solo alla fine, quindi tutto il lavoro del notebook 04 è andato perso.
+- **Scelta:** `train_regressor(..., checkpoint=percorso)`: a fine addestramento il modello (pesi, media e deviazione del target, storia) si salva su Drive; se il file esiste già, si ricarica invece di riaddestrare. Nei notebook 04 e 05 è attivo solo in modalità full (in quick non serve e si eviterebbe di riusare per errore modelli vecchi dopo una modifica del codice). Il nome del file contiene variante, iperparametri e seed.
+- **Effetto:** una disconnessione costa al più l'addestramento di un modello (≤ 30 min per la GNN più costosa). I risultati non cambiano: ogni modello ha il suo seed e si addestra in modo indipendente dagli altri. Verificato: il modello ricaricato dà le stesse previsioni e la stessa storia.
+- **Non fatto:** mantenere artificialmente attiva la sessione per aggirare il limite di inattività di Colab.

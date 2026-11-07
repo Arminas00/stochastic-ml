@@ -587,21 +587,29 @@ def count_params(model) -> int:
 
 def train_regressor(model, X_tr, y_tr, X_val, y_val, *, E_tr=None, E_val=None, lr=1e-3,
                     batch_size=128, max_epochs=40, patience=6, weight_decay=1e-4, seed=0,
-                    verbose=False):
+                    verbose=False, checkpoint=None):
     """Addestra un modello di regressione con perdita MSE sul target standardizzato.
 
     - Target standardizzato con media/deviazione del train (y_mu, y_sd salvati nel modello).
     - Adam + riduzione del learning rate a metà se l'RMSE di validazione non migliora per 3 epoche.
     - Early stopping sull'RMSE di validazione (pazienza `patience`), ripristino dei pesi migliori.
     Il validation set serve SOLO a questo (D-15). E_tr/E_val: feature extra (modello ibrido).
+    checkpoint: percorso di un file; se esiste, il modello già addestrato si ricarica invece di
+    riaddestrarlo, altrimenti si salva a fine addestramento (ripresa dopo una disconnessione, D-39).
     Restituisce (modello, storia)."""
     import copy
     import time
 
     import torch
 
-    make_deterministic(seed)
     dev = get_device()
+    if checkpoint is not None and Path(checkpoint).exists():
+        ck = torch.load(checkpoint, map_location=dev, weights_only=False)
+        model = model.to(dev)
+        model.load_state_dict(ck["state"])
+        model.y_mu, model.y_sd = ck["y_mu"], ck["y_sd"]
+        return model, ck["hist"]
+    make_deterministic(seed)
     model = model.to(dev)
     y_mu, y_sd = float(np.mean(y_tr)), float(np.std(y_tr))
     model.y_mu, model.y_sd = y_mu, y_sd
@@ -646,6 +654,11 @@ def train_regressor(model, X_tr, y_tr, X_val, y_val, *, E_tr=None, E_val=None, l
             if wait >= patience:
                 break
     model.load_state_dict(best_state)
+    if checkpoint is not None:
+        Path(checkpoint).parent.mkdir(parents=True, exist_ok=True)
+        tmp = Path(str(checkpoint) + ".tmp")          # scrittura atomica: niente file a metà
+        torch.save({"state": model.state_dict(), "y_mu": y_mu, "y_sd": y_sd, "hist": hist}, tmp)
+        tmp.replace(checkpoint)
     return model, hist
 
 

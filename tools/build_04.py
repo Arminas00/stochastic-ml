@@ -136,11 +136,15 @@ Stesso protocollo della CNN (D-27): due configurazioni, scelte sul validation (s
 NVG(fBm) con il solo grado, un seed); la configurazione scelta si usa per tutte e quattro le varianti.
 """),
 ("code", r'''
+import re
 def fit_gnn(name, hp, seed, verbose=False):
     n_in = DATA[name]["train"].x[0].shape[1]
     m = u.build_gnn(n_in=n_in, **hp)
+    # in full ogni modello addestrato si salva: dopo una disconnessione di Colab si riprende da lì (D-39)
+    ck = (Path(DATA_DIR) / f"ckpt04_{MODE}" / f"{re.sub(r'[^A-Za-z0-9]+', '_', name)}_h{hp['hidden']}"
+          f"_l{hp['n_layers']}_s{seed}.pt") if MODE == "full" else None
     return u.train_regressor(m, DATA[name]["train"], H["train"], DATA[name]["val"], H["val"],
-                             seed=seed, verbose=verbose, **TRAIN_KW)
+                             seed=seed, verbose=verbose, checkpoint=ck, **TRAIN_KW)
 
 MAIN = "4 GNN NVG(fBm) grado"
 search_rows, best = [], None

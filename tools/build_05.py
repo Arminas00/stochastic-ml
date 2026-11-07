@@ -147,14 +147,18 @@ concatenate prima della testa densa. Per la variante a residuo il target è $H -
 finale è $\hat H_{\rm DFA}$ + uscita della rete; l'RMSE sul residuo coincide con l'RMSE su $H$.
 """),
 ("code", r'''
+import re
 def fit_ensemble(name, make_model, Xs, target, extra, n_seeds, train_kw, offset=None):
     """Addestra n_seeds modelli; salva media e deviazione delle previsioni (+ offset per il residuo)."""
     t0 = time.time()
     members = []
     for k in range(n_seeds):
+        # in full ogni membro si salva: dopo una disconnessione di Colab si riprende da lì (D-39)
+        ck = (Path(DATA_DIR) / f"ckpt05_{MODE}" / f"{re.sub(r'[^A-Za-z0-9]+', '_', name)}_s{SEED + 100 * k}.pt"
+              if MODE == "full" else None)
         m, _ = u.train_regressor(make_model(), Xs["train"], target["train"], Xs["val"], target["val"],
                                  E_tr=extra["train"] if extra else None, E_val=extra["val"] if extra else None,
-                                 seed=SEED + 100 * k, **train_kw)
+                                 seed=SEED + 100 * k, checkpoint=ck, **train_kw)
         members.append(m)
     TIMES[name] = time.time() - t0
     P = {s: np.stack([u.predict(m, Xs[s], extra[s] if extra else None) for m in members])
