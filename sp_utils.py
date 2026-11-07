@@ -428,6 +428,38 @@ def physics_features(X: np.ndarray) -> dict:
             "graph": graph_features(X)}
 
 
+ABS_SCALES = (8, 16, 32)     # scale assolute comuni a tutte le lunghezze N >= 128 (s_max = N/4)
+N_SEG = 4                    # segmenti per le pendenze locali
+CLASSIC_INT_FEATURES = (["dfa", "rs"]
+                        + [f"dfa_pend{j}" for j in range(N_SEG)] + [f"rs_pend{j}" for j in range(N_SEG)]
+                        + [f"logF/sd_s{s}" for s in ABS_SCALES] + [f"logRS_s{s}" for s in ABS_SCALES])
+
+
+def local_slopes(scales: np.ndarray, logY: np.ndarray, n_seg: int = N_SEG) -> np.ndarray:
+    """Pendenze di logY contro log s su n_seg segmenti consecutivi (estremi condivisi) delle scale.
+    Una pendenza è adimensionale e, per un processo autosimile, vale ~H a ogni scala: non dipende
+    da N, a differenza dei valori log F(s) sulle scale relative (D-30)."""
+    ls = np.log(scales)
+    edges = np.linspace(0, len(ls) - 1, n_seg + 1).round().astype(int)
+    return np.column_stack([_slope(ls[a:b + 1], logY[:, a:b + 1]) for a, b in zip(edges[:-1], edges[1:])])
+
+
+def classic_intensive_features(f: dict, X: np.ndarray) -> np.ndarray:
+    """Feature classiche indipendenti da N e dall'ampiezza (D-30), dalle curve già calcolate:
+    stime globali DFA e R/S, pendenze locali su N_SEG segmenti, e i livelli a scale ASSOLUTE
+    s in ABS_SCALES (interpolati in log-log): log(F(s)/sd) e log<R/S>(s). F si divide per la
+    deviazione standard della serie, così la feature non usa l'ampiezza (cfr. D-19, D-26);
+    R/S è già adimensionale. Ordine come CLASSIC_INT_FEATURES."""
+    scales = np.asarray(f["scales"])
+    if scales[0] > ABS_SCALES[0] or scales[-1] < ABS_SCALES[-1]:
+        raise ValueError(f"Scale {scales[0]}..{scales[-1]} non coprono {ABS_SCALES}: serve N >= 128")
+    ls, la = np.log(scales), np.log(np.asarray(ABS_SCALES, dtype=float))
+    interp = lambda Y: np.stack([np.interp(la, ls, row) for row in Y])
+    sd = np.asarray(X, dtype=np.float64).std(axis=1)
+    return np.column_stack([f["dfa"], f["rs"], local_slopes(scales, f["logF"]), local_slopes(scales, f["logRS"]),
+                            interp(f["logF"]) - np.log(sd)[:, None], interp(f["logRS"])])
+
+
 def load_or_make_features(ds: dict, mode: str, seed: int, data_dir: str | Path = "data",
                           verbose: bool = True) -> dict:
     """Calcola (o carica dalla cache) physics_features per ogni split del dataset."""

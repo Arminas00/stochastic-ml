@@ -26,6 +26,13 @@ Le feature riassuntive sono quelle calcolate nel notebook 02, in tre gruppi:
 **classiche** (stime DFA e R/S e le curve $\log F(s)$, $\log\langle R/S\rangle(n)$ su 12 scale: 26 numeri),
 **grafo** (16 feature dei grafi di visibilità), **tutte** (42).
 
+Le curve "classiche" sono calcolate su scale relative a $N$ (da 8 a $N/4$), quindi la stessa colonna cambia
+significato quando cambia la lunghezza (D-30). Per questo c'è anche una versione **indipendente da $N$**:
+**classiche-int** (16 numeri: stime DFA e R/S, pendenze locali su 4 tratti delle curve, e i livelli
+$\log(F(s)/\hat\sigma)$ e $\log\langle R/S\rangle(s)$ a scale **assolute** $s = 8, 16, 32$, comuni a tutte le
+lunghezze $N \ge 128$) e **tutte-int** (classiche-int + grafo, 32 numeri). Dividere $F$ per la deviazione standard
+della serie toglie l'ampiezza, come la normalizzazione per serie della CNN.
+
 I modelli sulle feature formano la cella "senza serie grezza, con feature fisiche" del disegno 2×2 (D-12);
 la CNN è la cella "con serie grezza, senza feature fisiche". La cella mista (ibrido) è nel notebook 05.
 
@@ -186,17 +193,19 @@ Due modelli, con lo stesso protocollo: **MLP** (rete densa, ensemble di `N_SEEDS
 **gradient boosting** (`HistGradientBoostingRegressor` di scikit-learn, deterministico: un solo modello).
 """),
 ("code", r'''
-def feature_matrix(f, group):
-    classic = np.column_stack([f["dfa"], f["rs"], f["logF"], f["logRS"]])
-    if group == "classiche":
-        return classic
+def feature_matrix(f, X, group):
     if group == "grafo":
         return f["graph"]
-    return np.column_stack([classic, f["graph"]])
+    if group.endswith("-int"):          # versione indipendente da N e dall'ampiezza (D-30)
+        classic = u.classic_intensive_features(f, X)
+    else:
+        classic = np.column_stack([f["dfa"], f["rs"], f["logF"], f["logRS"]])
+    return classic if group.startswith("classiche") else np.column_stack([classic, f["graph"]])
 
+GROUPS = ["classiche", "grafo", "tutte", "classiche-int", "tutte-int"]
 FSETS = {}
-for group in ["classiche", "grafo", "tutte"]:
-    raw = {s: feature_matrix(feats[s], group) for s in SPLITS}
+for group in GROUPS:
+    raw = {s: feature_matrix(feats[s], ds[s]["X"], group) for s in SPLITS}
     sc = u.FeatureScaler().fit(raw["train"])
     FSETS[group] = {s: sc.transform(raw[s]) for s in SPLITS}
     print(f"{group:<10}: {FSETS[group]['train'].shape[1]} feature")
@@ -250,7 +259,8 @@ for ref in ["0 baseline (media)", "1a DFA"]:
 
 order = ["0 baseline (media)", "1a DFA", "3 CNN (per_serie)", "3 CNN (globale)",
          "3-MLP feature classiche", "3-GBT feature classiche", "3-MLP feature grafo", "3-GBT feature grafo",
-         "3-MLP feature tutte", "3-GBT feature tutte"]
+         "3-MLP feature tutte", "3-GBT feature tutte", "3-MLP feature classiche-int", "3-GBT feature classiche-int",
+         "3-MLP feature tutte-int", "3-GBT feature tutte-int"]
 rows = []
 for name in order:
     m = u.regression_metrics(H["test"], PRED[name]["test"])
@@ -315,7 +325,8 @@ feature calcolate alla nuova lunghezza. Tutti sono stati addestrati solo alla lu
 lengths = sorted([CFG["N"]] + list(CFG["robust_lengths"]))
 split_of = {L: ("test" if L == CFG["N"] else f"test_N{L}") for L in lengths}
 rob = ["1a DFA", "3 CNN (per_serie)", "3 CNN (globale)", "3-GBT feature classiche", "3-GBT feature grafo",
-       "3-GBT feature tutte", "3-MLP feature tutte"]
+       "3-GBT feature tutte", "3-MLP feature tutte", "3-GBT feature classiche-int", "3-GBT feature tutte-int",
+       "3-MLP feature tutte-int"]
 rows = []
 for name in rob:
     for L in lengths:
@@ -349,7 +360,7 @@ print("Salvato", out, "| tempi di addestramento (s):", {k: round(v) for k, v in 
 ref = df_res.loc["1a DFA", "RMSE"]
 for name in order[2:]:
     r = df_res.loc[name, "RMSE"]
-    print(f"{name:<28} RMSE {r:.4f}   rispetto alla DFA: {100 * (r - ref) / ref:+.0f}%")
+    print(f"{name:<32} RMSE {r:.4f}   rispetto alla DFA: {100 * (r - ref) / ref:+.0f}%")
 '''),
 ("md", r"""
 **Cosa mostra questo notebook** (commenti scritti sulla modalità `quick`, con reti piccole e 4000 serie di
@@ -384,9 +395,18 @@ train: da ricontrollare sulla `full`)
   migliora con $N$ (RMSE 0.023 a $N=2048$): quasi tutte quelle feature sono grandezze intensive
   (esponente della coda, frazione di nodi con grado 2 o 3, dispersione dei gradi) che non dipendono dalla
   lunghezza. Un modello sulle curve classiche va addestrato alla lunghezza a cui si usa.
+- **Correzione (D-30): feature classiche indipendenti da $N$.** Sostituendo le curve con pendenze locali e
+  livelli a scale assolute ($s = 8, 16, 32$), il gruppo **tutte-int** perde un po' a $N = 512$ (GBT 0.030
+  [0.029, 0.031] contro 0.026 delle curve) ma **non crolla più**: 0.072, 0.045, 0.030, 0.023, 0.018 per
+  $N = 128 \ldots 2048$. È meglio della CNN a **tutte** le lunghezze diverse da quella di addestramento e alla pari
+  a $N = 512$ (0.031). Con la regola del corso (prestazioni simili → il più semplice), il **GBT sulle 32 feature
+  indipendenti da $N$** è il candidato più solido: pochi secondi di addestramento, nessuna dipendenza
+  dall'ampiezza, robusto in lunghezza. Il guadagno rispetto alle curve a $N$ fisso (0.026) era in parte
+  adattamento alla lunghezza del train e, nei livelli di $F(s)$ non normalizzati, all'ampiezza unitaria delle
+  simulazioni.
 
 **Decisioni di questo notebook:** D-25 architettura della CNN; D-26 normalizzazione per serie; D-27 stesso
-sforzo di tuning; D-28 modelli e gruppi di feature.
+sforzo di tuning; D-28 modelli e gruppi di feature; D-30 feature indipendenti da $N$.
 """),
 ]
 

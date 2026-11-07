@@ -132,7 +132,21 @@ Formato: **D-numero — titolo** · data · *Scelta* / *Perché* / *Alternative 
 - **Risultato:** i modelli con le feature "classiche" o "tutte" hanno RMSE 0.13–0.29 appena N cambia; il modello sulle sole feature del grafo invece regge e migliora con N (0.023 a N = 2048). La CNN resta stabile.
 - **Perché:** le scale di DFA/R-S sono scelte relative a N (fino a N/4): la stessa colonna ha un significato diverso a N diversi. Le feature del grafo sono quasi tutte intensive (esponente della coda, frazione di nodi con grado 2 o 3, dispersione dei gradi).
 - **Correzione:** una prima versione di questa voce attribuiva il problema a tutte le feature, compreso il grafo; il notebook 04 ha mostrato che non è così.
-- **Alternativa possibile (non fatta):** scale assolute fisse comuni a tutte le lunghezze. Per ora si dichiara il limite.
+- **Risolto il 2026-11-07 (scelta dell'utente: "Fix D-30 features"):** nuovo gruppo di feature classiche
+  indipendenti da N, `sp_utils.classic_intensive_features` (16 numeri): stime DFA e R/S; pendenze locali di
+  log F e log R/S su 4 tratti consecutivi delle scale; livelli log(F(s)/σ̂) e log⟨R/S⟩(s) a scale **assolute**
+  s = 8, 16, 32 (interpolati in log-log; coperte da ogni N ≥ 128). Gruppi "classiche-int" e "tutte-int"
+  (+ 16 feature del grafo = 32) nel notebook 03; ibrido "full-int" nel notebook 05. Le vecchie curve restano
+  nei notebook come confronto (ablazione del difetto).
+- **Perché così:** una pendenza è adimensionale e per un processo autosimile vale ~H a ogni scala; un livello a
+  scala assoluta fissa ha lo stesso significato a ogni N. F si divide per la deviazione standard della serie
+  per non usare l'ampiezza (artefatto delle simulazioni a varianza 1, D-19/D-26); R/S è già adimensionale.
+- **Prova preliminare (GBT, quick, prima di toccare i notebook; test visto solo per scegliere il disegno, non i
+  suoi iperparametri):** solo pendenze: 0.043 a N = 512 e 0.026 a N = 2048, robuste ma meno precise. Pendenze +
+  livelli assoluti + grafo: 0.030 e 0.018. Con F non diviso per σ̂: un po' meglio (0.032 contro 0.036 sul solo
+  gruppo dei livelli), ma è l'artefatto dell'ampiezza: scartato.
+- **Scartate:** scale assolute oltre 32 (non disponibili per N = 128 senza valori mancanti); togliere dal grafo
+  le feature estensive (log k_max, ⟨k⟩), che in prova peggiorano (0.034 contro 0.033) senza migliorare la robustezza.
 
 ### D-31 — GNN: Graph Isomorphism Network con lettura a ogni strato · 2026-11-06 · notebook 04
 - **Scelta:** strati GINConv (aggregazione a somma + MLP, ε addestrabile), BatchNorm, ReLU; lettura per grafo con media e massimo dei nodi dopo ogni strato, concatenate; testa densa 64→1.

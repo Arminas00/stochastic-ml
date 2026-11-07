@@ -30,6 +30,8 @@ più gli stimatori fisici da soli (DFA grezza e ricalibrata).
 - **ibrido-min**: la CNN riceve le 4 stime fisiche del piano originale — $\hat H_{\rm DFA}$, $\hat H_{R/S}$,
   $\gamma$ della NVG, $\lambda$ della HVG;
 - **ibrido-full**: la CNN riceve tutte le 42 feature (curve DFA e R/S + 16 feature del grafo);
+- **ibrido-full-int**: come ibrido-full, ma con le 32 feature indipendenti da $N$ e dall'ampiezza (D-30,
+  notebook 03: stime, pendenze locali, livelli a scale assolute $s = 8, 16, 32$, grafo);
 - **ibrido-residuo**: come ibrido-min, ma la rete predice la correzione $H - \hat H_{\rm DFA}$;
 - **GNN ibrida**: la variante migliore della GNN (notebook 04) con le 4 stime fisiche.
 
@@ -104,14 +106,16 @@ Sono funzioni della sola serie: usarle come input non introduce alcuna informazi
 """),
 ("code", r'''
 col = {n: j for j, n in enumerate(u.GRAPH_FEATURES)}
-def phys(f, group):
+def phys(f, X, group):
     if group == "min":
         return np.column_stack([f["dfa"], f["rs"], f["graph"][:, col["nvg_fbm_gamma"]], f["graph"][:, col["hvg_fgn_lambda"]]])
+    if group == "full-int":     # versione indipendente da N (D-30): come "tutte-int" del notebook 03
+        return np.column_stack([u.classic_intensive_features(f, X), f["graph"]])
     return np.column_stack([f["dfa"], f["rs"], f["logF"], f["logRS"], f["graph"]])
 
 E = {}
-for group in ["min", "full"]:
-    raw = {s: phys(feats[s], group) for s in SPLITS}
+for group in ["min", "full", "full-int"]:
+    raw = {s: phys(feats[s], ds[s]["X"], group) for s in SPLITS}
     sc = u.FeatureScaler().fit(raw["train"])
     E[group] = {s: sc.transform(raw[s]) for s in SPLITS}
     print(f"ibrido-{group}: {E[group]['train'].shape[1]} feature fisiche")
@@ -163,7 +167,7 @@ def fit_ensemble(name, make_model, Xs, target, extra, n_seeds, train_kw, offset=
     return members
 
 HYB = {}
-for group in ["min", "full"]:
+for group in ["min", "full", "full-int"]:
     n_extra = E[group]["train"].shape[1]
     HYB[group] = fit_ensemble(f"5 CNN ibrida-{group}", lambda: u.build_model("cnn", n_extra=n_extra, **CNN_HP),
                               XN, H, E[group], N_SEEDS, TRAIN_KW)
@@ -209,12 +213,13 @@ GNN_HYB = f"5 GNN ibrida ({BEST_GNN.replace('4 GNN ', '')})"
 p02 = np.load(Path(DATA_DIR) / f"preds02_{MODE}_seed{SEED}.npz")
 p03 = np.load(Path(DATA_DIR) / f"preds03_{MODE}_seed{SEED}.npz")
 for ref, src in [("0 baseline (media)", p02), ("1a DFA", p02), ("1a-cal DFA ricalibrata", p02),
-                 ("3-GBT feature tutte", p03), ("3 CNN (per_serie)", p03)]:
+                 ("3-GBT feature tutte", p03), ("3-GBT feature tutte-int", p03), ("3 CNN (per_serie)", p03)]:
     PRED[ref] = {s: src[f"{ref}__{s}"] for s in SPLITS}
 PRED[BEST_GNN] = {s: p04[f"{BEST_GNN}__{s}"] for s in SPLITS}
 
 order = ["0 baseline (media)", "1a DFA", "1a-cal DFA ricalibrata", "5-GBT 4 stime fisiche", "3-GBT feature tutte",
-         "3 CNN (per_serie)", "5 CNN ibrida-min", "5 CNN ibrida-full", "5 CNN ibrida-residuo", BEST_GNN, GNN_HYB]
+         "3-GBT feature tutte-int", "3 CNN (per_serie)", "5 CNN ibrida-min", "5 CNN ibrida-full", "5 CNN ibrida-full-int",
+         "5 CNN ibrida-residuo", BEST_GNN, GNN_HYB]
 rows = []
 for name in order:
     m = u.regression_metrics(H["test"], PRED[name]["test"])
@@ -233,6 +238,8 @@ table = pd.DataFrame({
                             f"CNN ibrida-min: {R['5 CNN ibrida-min']:.4f}  (residuo: {R['5 CNN ibrida-residuo']:.4f})"],
     "con 42 feature fisiche": [f"GBT su 42 feature: {R['3-GBT feature tutte']:.4f}",
                                f"CNN ibrida-full: {R['5 CNN ibrida-full']:.4f}"],
+    "con 32 feature indipendenti da N": [f"GBT su 32 feature: {R['3-GBT feature tutte-int']:.4f}",
+                                         f"CNN ibrida-full-int: {R['5 CNN ibrida-full-int']:.4f}"],
 }, index=["senza serie grezza", "con serie grezza"])
 print(f"Solo fisica, nessun apprendimento: DFA {R['1a DFA']:.4f} (ricalibrata {R['1a-cal DFA ricalibrata']:.4f})")
 print(f"GNN: {BEST_GNN} {R[BEST_GNN]:.4f}  ->  ibrida {R[GNN_HYB]:.4f}")
@@ -296,13 +303,15 @@ all'uscita: la variante a residuo resta comunque ancorata alla DFA della serie g
 
 ## 8. Robustezza rispetto a $N$
 
-Le feature dell'ibrido-full contengono le curve DFA/R-S, che dipendono da $N$ (D-30): ci aspettiamo che
-l'ibrido-full erediti questo limite; l'ibrido-min usa solo pendenze ed esponenti.
+Le feature dell'ibrido-full contengono le curve DFA/R-S su scale relative a $N$ (D-30): ci aspettiamo che
+l'ibrido-full erediti questo limite. L'ibrido-min usa solo pendenze ed esponenti, l'ibrido-full-int le feature
+costruite per essere indipendenti da $N$.
 """),
 ("code", r'''
 lengths = sorted([CFG["N"]] + list(CFG["robust_lengths"]))
 split_of = {L: ("test" if L == CFG["N"] else f"test_N{L}") for L in lengths}
-rob = ["1a DFA", "3 CNN (per_serie)", "5 CNN ibrida-min", "5 CNN ibrida-full", "5 CNN ibrida-residuo", GNN_HYB]
+rob = ["1a DFA", "3 CNN (per_serie)", "3-GBT feature tutte-int", "5 CNN ibrida-min", "5 CNN ibrida-full",
+       "5 CNN ibrida-full-int", "5 CNN ibrida-residuo", GNN_HYB]
 rows = [{"metodo": n, "N": L, "RMSE": u.regression_metrics(H[split_of[L]], PRED[n][split_of[L]])["RMSE"]}
         for n in rob for L in lengths]
 df_rob = pd.DataFrame(rows).pivot(index="metodo", columns="N", values="RMSE")
@@ -331,7 +340,8 @@ print("Salvato", out, "| tempi (s):", {k: round(v) for k, v in TIMES.items()})
 ("code", r'''
 for a, b in [("3 CNN (per_serie)", "5 CNN ibrida-min"), ("3 CNN (per_serie)", "5 CNN ibrida-full"),
              ("3 CNN (per_serie)", "5 CNN ibrida-residuo"), ("1a DFA", "5 CNN ibrida-min"),
-             ("3-GBT feature tutte", "5 CNN ibrida-full"), (BEST_GNN, GNN_HYB)]:
+             ("3-GBT feature tutte", "5 CNN ibrida-full"), ("3-GBT feature tutte-int", "5 CNN ibrida-full-int"),
+             ("3 CNN (per_serie)", "5 CNN ibrida-full-int"), (BEST_GNN, GNN_HYB)]:
     print(f"{b:<40} vs {a:<26}: {100 * (R[b] / R[a] - 1):+5.0f}%")
 '''),
 ("md", r"""
@@ -339,10 +349,10 @@ for a, b in [("3 CNN (per_serie)", "5 CNN ibrida-min"), ("3 CNN (per_serie)", "5
 
 **Tabella 2×2 (RMSE di test su H).**
 
-| | senza feature fisiche | 4 stime fisiche | 42 feature fisiche |
-|---|---|---|---|
-| senza serie grezza | baseline 0.259 | GBT 0.045 | GBT 0.026 |
-| con serie grezza | CNN 0.031 | CNN ibrida-min 0.032 | CNN ibrida-full 0.026 |
+| | senza feature fisiche | 4 stime fisiche | 42 feature (curve, legate a N) | 32 feature indipendenti da N |
+|---|---|---|---|---|
+| senza serie grezza | baseline 0.259 | GBT 0.045 | GBT 0.026 | GBT 0.030 |
+| con serie grezza | CNN 0.031 | CNN ibrida-min 0.032 | CNN ibrida-full 0.026 | CNN ibrida-full-int 0.029 |
 
 - **Le 4 stime fisiche non aggiungono nulla alla CNN a N = 512.** L'ibrida-min (0.032 [0.031, 0.033]) è alla pari con la CNN da sola (0.031 [0.030, 0.032]). La CNN estrae già dalla serie l'informazione contenuta in DFA e R/S.
 - **L'ibrida-full (0.0256 [0.025, 0.026]) è la migliore in assoluto**, ma gli intervalli si sovrappongono con il GBT sulle stesse 42 feature senza serie grezza (0.0263 [0.025, 0.027]). Per la regola del corso, a parità di prestazioni vince il modello più semplice: il GBT sulle feature, senza rete convoluzionale.
@@ -356,13 +366,14 @@ for a, b in [("3 CNN (per_serie)", "5 CNN ibrida-min"), ("3 CNN (per_serie)", "5
 **Robustezza in N: qui l'ibrido fa la differenza.**
 - L'ibrida-min generalizza **meglio di tutti** verso serie più lunghe: 0.023 a N = 1024 e 0.020 a N = 2048, contro 0.028 e 0.031 della CNN e 0.034 della DFA. Le stime DFA/R-S sono intensive (migliorano con N), e la rete che si appoggia su di esse eredita questa proprietà.
 - L'ibrida-full **collassa** (0.148 a N = 2048), come il GBT sulle feature "tutte" (0.136, notebook 03). Le curve log F(s) e log R/S sono calcolate su scale che dipendono da N (D-30), quindi il modello impara il loro aspetto a N = 512.
-- Verso serie più corte (N = 128) nessun ibrido batte la CNN (0.079); la GNN ibrida è la migliore (0.071).
+- **Con le feature indipendenti da N (D-30) il collasso sparisce.** L'ibrida-full-int vale 0.068, 0.043, 0.029, 0.022, 0.021 per N = 128 … 2048: è tra i migliori a ogni lunghezza (il migliore per N ≤ 1024), anche verso serie più corte, dove ibrida-min (0.088) e CNN (0.079) sono peggiori.
+- Il GBT sulle stesse 32 feature, senza serie grezza, è quasi identico: 0.072, 0.045, 0.030, 0.023, 0.018. A N = 512 l'ibrida-full-int è meglio del 4% (0.0286 [0.028, 0.030] contro 0.0299 [0.029, 0.031]), con intervalli che si toccano.
 
 **Conclusione.**
-- A lunghezza fissa, aggiungere la fisica come input non migliora la CNN in modo significativo. Il miglior risultato (≈ 0.026) si ottiene sia con l'ibrida-full sia con il GBT sulle sole feature, e la regola del corso premia il GBT.
-- Il valore dell'ibrido è la **robustezza**: con le 4 stime fisiche intensive, il modello resta accurato anche fuori dalla lunghezza di addestramento. È l'argomento più forte per l'approccio ibrido all'esame.
-- Questo suggerisce la decisione aperta D-30: costruire feature indipendenti da N (es. pendenze invece delle curve) per avere insieme accuratezza e robustezza.
-- Caveat: modalità quick, pochi semi; i confronti entro ~5% non sono significativi. Numeri definitivi dalla modalità full.
+- A lunghezza fissa, aggiungere la fisica come input migliora la CNN di poco: −7% con le 32 feature indipendenti da N, −17% con le curve legate a N, che però crollano appena N cambia. In ogni cella con feature, il GBT sulle sole feature è a pochi punti percentuali dalla CNN ibrida corrispondente.
+- **Scelta per la regola del corso** (prestazioni simili → il più semplice): il **GBT sulle 32 feature indipendenti da N**. Ha la stessa accuratezza della CNN a N = 512, è più robusto della CNN a ogni altra lunghezza, si addestra in secondi e non usa l'ampiezza. La CNN ibrida-full-int è il miglior modello neurale, con un vantaggio piccolo.
+- Il valore dell'informazione fisica sta soprattutto nella **robustezza**. Le stime e le pendenze sono grandezze intensive, e i modelli che le usano generalizzano a lunghezze mai viste; le curve su scale relative a N no. Il punto non è "fisica sì o no", ma **quale rappresentazione** della fisica.
+- Caveat: modalità quick, pochi semi; i confronti entro ~5% non sono significativi. Numeri definitivi dalla modalità full. La forma delle feature indipendenti da N è stata scelta dopo una prova preliminare in cui si vedeva anche il test (D-30).
 """),
 ]
 
