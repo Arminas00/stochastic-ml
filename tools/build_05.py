@@ -61,9 +61,9 @@ if MODE == "quick":
     TRAIN_KW = dict(max_epochs=15, patience=5, batch_size=128, lr=2e-3)       # come notebook 03
     GNN_TRAIN_KW = dict(max_epochs=12, patience=4, batch_size=128, lr=1e-3)   # come notebook 04
 else:
-    N_SEEDS, N_SEEDS_GNN = 5, 5
+    N_SEEDS, N_SEEDS_GNN = 5, 3                                               # GNN come notebook 04 (D-37)
     TRAIN_KW = dict(max_epochs=40, patience=6, batch_size=128, lr=1e-3)
-    GNN_TRAIN_KW = dict(max_epochs=40, patience=6, batch_size=128, lr=1e-3)
+    GNN_TRAIN_KW = dict(max_epochs=25, patience=6, batch_size=128, lr=1e-3)
 GBT_GRID = [dict(max_iter=300, learning_rate=0.05, max_leaf_nodes=15),
             dict(max_iter=600, learning_rate=0.05, max_leaf_nodes=31)]
 '''),

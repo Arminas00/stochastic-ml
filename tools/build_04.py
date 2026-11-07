@@ -54,9 +54,9 @@ if MODE == "quick":
     GNN_GRID = [dict(hidden=32, n_layers=3), dict(hidden=64, n_layers=3)]
     TRAIN_KW = dict(max_epochs=12, patience=4, batch_size=128, lr=1e-3)
 else:
-    N_SEEDS = 5
+    N_SEEDS = 3          # D-37: budget ridotto per i limiti di Colab (CNN: 5 seed, 40 epoche)
     GNN_GRID = [dict(hidden=32, n_layers=3), dict(hidden=64, n_layers=4)]
-    TRAIN_KW = dict(max_epochs=40, patience=6, batch_size=128, lr=1e-3)
+    TRAIN_KW = dict(max_epochs=25, patience=6, batch_size=128, lr=1e-3)
 '''),
 ("code", r'''
 import time
